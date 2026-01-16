@@ -1,0 +1,8 @@
+{
+  "name": "Aura - Visionary Interiors",
+  "description": "A next-gen interior design workspace that uses Gemini to re-imagine your space and your future self.",
+  "requestFramePermissions": [
+    "microphone",
+    "camera"
+  ]
+}
