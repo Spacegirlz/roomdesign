@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Upload, Sparkles, Layout, Trash2, ArrowRight, Wand2, RefreshCcw, Layers, Download, FileText, Armchair, Palette, X, Grid, Square, Link, Info, RotateCcw, Lock, Unlock, MapPin, Plus, HelpCircle, Monitor, DollarSign, Image as ImageIcon, MessageSquare } from 'lucide-react';
+import { Upload, Sparkles, Layout, Trash2, ArrowRight, Wand2, RefreshCcw, Layers, Download, FileText, Armchair, Palette, X, Grid, Square, Link, Info, RotateCcw, Lock, Unlock, MapPin, Plus, HelpCircle, Monitor, DollarSign, Image as ImageIcon, MessageSquare, AlertCircle } from 'lucide-react';
 import { DesignMode, DesignState, ChatMessage, ReferenceImage, ReferenceType, GenerationFormat } from '../types';
 import { generateRoomViz, generateDesignAdvice, analyzeExternalLink, generateReportText } from '../services/geminiService';
 import { Button } from './Button';
@@ -9,6 +9,8 @@ import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 
 // --- Types & Constants ---
+
+const MAX_TOTAL_IMAGES = 10;
 
 const MODES = [
   { id: DesignMode.REDESIGN, label: 'Re-Imagine', icon: Sparkles, desc: 'Complete makeover. Option to lock walls/windows.' },
@@ -85,7 +87,8 @@ export const Studio: React.FC = () => {
 
   const initialState: DesignState = {
     projectID: generateID(),
-    baseImage: null,
+    spaceImages: [],
+    activeSpaceIndex: 0,
     referenceImages: [],
     generatedImage: null,
     mode: DesignMode.REDESIGN,
@@ -106,19 +109,22 @@ export const Studio: React.FC = () => {
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([{
     id: 'intro',
     role: 'model',
-    text: `**Welcome to Aura.** Project ID: #${initialState.projectID} \n\nI am your design architect. Upload a photo of your space, and I will help you re-envision it.`
+    text: `**Welcome to Aura.** Project ID: #${initialState.projectID} \n\nI am your design architect. Upload photos of your space (different angles help), and I will help you re-envision it.`
   }]);
 
   const [linkInput, setLinkInput] = useState("");
   const [isAnalyzingLink, setIsAnalyzingLink] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const addMoreSpaceRef = useRef<HTMLInputElement>(null);
   const refInputRef = useRef<HTMLInputElement>(null);
   const chatBottomRef = useRef<HTMLDivElement>(null);
   const [nextRefType, setNextRefType] = useState<ReferenceType>('style');
   const [sliderPos, setSliderPos] = useState(50);
   const sliderRef = useRef<HTMLDivElement>(null);
   const printRef = useRef<HTMLDivElement>(null);
+
+  const totalImageCount = state.spaceImages.length + state.referenceImages.length;
 
   useEffect(() => {
     chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -136,37 +142,82 @@ export const Studio: React.FC = () => {
       }
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, isRef: boolean = false) => {
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, type: 'space' | 'ref') => {
     if (!e.target.files) return;
     const files = Array.from(e.target.files) as File[];
     if (files.length === 0) return;
 
-    if (isRef) {
-        files.forEach(file => {
-            if (state.referenceImages.length >= 8) return;
-            const reader = new FileReader();
-            reader.onload = (event) => {
-                const result = event.target?.result as string;
+    const remainingSlots = MAX_TOTAL_IMAGES - totalImageCount;
+    
+    if (remainingSlots <= 0) {
+        alert("Image Limit Reached (10/10). Please remove some images before adding more.");
+        e.target.value = '';
+        return;
+    }
+
+    if (files.length > remainingSlots) {
+        alert(`You can only add ${remainingSlots} more images.`);
+    }
+
+    const filesToProcess = files.slice(0, remainingSlots);
+
+    filesToProcess.forEach(file => {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            const result = event.target?.result as string;
+            
+            if (type === 'space') {
+                 setState(prev => {
+                     const isFirst = prev.spaceImages.length === 0;
+                     return {
+                         ...prev,
+                         spaceImages: [...prev.spaceImages, result],
+                         generatedImage: null, // Reset generated if new space context added
+                         // If it's the first image, trigger the chat intro
+                     };
+                 });
+                 if (state.spaceImages.length === 0) {
+                     handleSendMessage("I've uploaded my space. Analyze the structure and potential.", result);
+                 }
+            } else {
+                // Reference
                 const newRef: ReferenceImage = {
                     id: Date.now().toString() + Math.random(),
                     url: result,
                     type: nextRefType
                 };
                 setState(prev => ({ ...prev, referenceImages: [...prev.referenceImages, newRef] }));
-            };
-            reader.readAsDataURL(file);
-        });
-    } else {
-        const file = files[0];
-        const reader = new FileReader();
-        reader.onload = (event) => {
-            const result = event.target?.result as string;
-            setState(prev => ({ ...prev, baseImage: result, generatedImage: null }));
-            handleSendMessage("I've uploaded my room. Analyze the structure and potential.", result);
+            }
         };
         reader.readAsDataURL(file);
-    }
+    });
     e.target.value = '';
+  };
+
+  const setActiveSpaceImage = (index: number) => {
+      setState(prev => ({
+          ...prev,
+          activeSpaceIndex: index,
+          generatedImage: null // Clear generation as the view changed
+      }));
+  };
+
+  const removeSpaceImage = (index: number, e: React.MouseEvent) => {
+      e.stopPropagation();
+      setState(prev => {
+          const newImages = [...prev.spaceImages];
+          newImages.splice(index, 1);
+          let newActive = prev.activeSpaceIndex;
+          if (index < newActive) newActive--;
+          if (newActive >= newImages.length) newActive = Math.max(0, newImages.length - 1);
+          
+          return {
+              ...prev,
+              spaceImages: newImages,
+              activeSpaceIndex: newActive,
+              generatedImage: null
+          };
+      });
   };
 
   const handleAddLink = async () => {
@@ -199,9 +250,12 @@ export const Studio: React.FC = () => {
     setChatHistory(prev => [...prev, newMessage]);
     setState(prev => ({...prev, prompt: ''}));
 
+    // Use active image if available, or override
+    const activeImg = imgOverride || (state.spaceImages.length > 0 ? state.spaceImages[state.activeSpaceIndex] : undefined);
+
     const aiResponse = await generateDesignAdvice(
         [...chatHistory, {role: 'user', text}], 
-        imgOverride || state.baseImage
+        activeImg
     );
     
     setChatHistory(prev => [...prev, {
@@ -212,7 +266,7 @@ export const Studio: React.FC = () => {
   };
 
   const handleGenerate = async () => {
-    if (!state.baseImage) return;
+    if (state.spaceImages.length === 0) return;
     
     setState(prev => ({ ...prev, isGenerating: true }));
     
@@ -224,8 +278,12 @@ export const Studio: React.FC = () => {
       
       const budgetDesc = BUDGET_MAP[state.budgetIndex].label;
 
+      const activeImage = state.spaceImages[state.activeSpaceIndex];
+      const contextImages = state.spaceImages.filter((_, i) => i !== state.activeSpaceIndex);
+
       const result = await generateRoomViz(
-        state.baseImage,
+        activeImage,
+        contextImages,
         state.mode,
         state.prompt,
         state.referenceImages,
@@ -238,7 +296,7 @@ export const Studio: React.FC = () => {
       );
 
       if (result) {
-        const report = await generateReportText(state.baseImage, result, state.mode, budgetDesc, state.location, state.prompt);
+        const report = await generateReportText(activeImage, result, state.mode, budgetDesc, state.location, state.prompt);
         setState(prev => ({ ...prev, generatedImage: result, isGenerating: false, reportContent: report }));
       } else {
         throw new Error("No image generated");
@@ -295,6 +353,10 @@ export const Studio: React.FC = () => {
       setTimeout(() => refInputRef.current?.click(), 0);
   }
 
+  const triggerSpaceUpload = () => {
+      setTimeout(() => addMoreSpaceRef.current?.click(), 0);
+  }
+
   return (
     <div className="h-[100dvh] bg-[#0a0a0c] text-white flex flex-col font-sans overflow-hidden selection:bg-orange-500/30">
       
@@ -326,8 +388,9 @@ export const Studio: React.FC = () => {
              <Button variant="secondary" onClick={() => setState(p => ({...p, showGuide: !p.showGuide}))} className="px-3 lg:px-4 text-xs lg:text-sm">
                 <HelpCircle className="w-4 h-4 lg:w-5 lg:h-5 mr-0 lg:mr-2" /> <span className="hidden lg:inline">Guide</span>
              </Button>
-             <div className="px-2 lg:px-4 py-1 lg:py-2 bg-white/5 rounded-xl text-xs lg:text-sm font-mono text-white/40">
+             <div className="px-2 lg:px-4 py-1 lg:py-2 bg-white/5 rounded-xl text-xs lg:text-sm font-mono text-white/40 flex items-center gap-2">
                 #{state.projectID}
+                <div className={`w-2 h-2 rounded-full ${totalImageCount >= MAX_TOTAL_IMAGES ? 'bg-red-500 animate-pulse' : 'bg-emerald-500'}`} />
              </div>
         </div>
       </div>
@@ -355,9 +418,14 @@ export const Studio: React.FC = () => {
              ${mobileTab === 'assets' ? 'flex flex-1 w-full' : 'hidden'}
         `}>
             <div className="p-6">
-                <h3 className="font-bold text-white/70 mb-4 text-sm tracking-widest uppercase flex items-center gap-2">
-                    <Layers className="w-4 h-4" /> Reality Anchors
-                </h3>
+                <div className="flex items-center justify-between mb-4">
+                    <h3 className="font-bold text-white/70 text-sm tracking-widest uppercase flex items-center gap-2">
+                        <Layers className="w-4 h-4" /> Reality Anchors
+                    </h3>
+                    <span className={`text-xs font-mono px-2 py-1 rounded ${totalImageCount >= MAX_TOTAL_IMAGES ? 'bg-red-500/20 text-red-300' : 'bg-white/10 text-white/40'}`}>
+                        {totalImageCount}/{MAX_TOTAL_IMAGES}
+                    </span>
+                </div>
 
                 {/* VISUAL DROP ZONE */}
                 <div 
@@ -378,16 +446,22 @@ export const Studio: React.FC = () => {
                                 <div className="absolute inset-0 bg-black/60 flex items-center justify-center opacity-0 group-hover/item:opacity-100 transition-opacity">
                                     <span className="text-xs font-bold uppercase tracking-wider text-white bg-black/50 px-2 py-1 rounded">{img.type}</span>
                                 </div>
+                                <button 
+                                    onClick={() => setState(prev => ({...prev, referenceImages: prev.referenceImages.filter(r => r.id !== img.id)}))}
+                                    className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1 opacity-0 group-hover/item:opacity-100 transition-opacity"
+                                >
+                                    <X className="w-3 h-3" />
+                                </button>
                             </div>
                         ))}
                     </div>
 
                     {/* Hidden Controls for Interactions */}
                     <div className="mt-4 flex gap-2">
-                        <Button variant="secondary" onClick={() => triggerRefUpload('style')} className="flex-1 text-xs py-2 px-0 h-10">
+                        <Button variant="secondary" onClick={() => triggerRefUpload('style')} className="flex-1 text-xs py-2 px-0 h-10" disabled={totalImageCount >= MAX_TOTAL_IMAGES}>
                             + Style
                         </Button>
-                        <Button variant="secondary" onClick={() => triggerRefUpload('element')} className="flex-1 text-xs py-2 px-0 h-10">
+                        <Button variant="secondary" onClick={() => triggerRefUpload('element')} className="flex-1 text-xs py-2 px-0 h-10" disabled={totalImageCount >= MAX_TOTAL_IMAGES}>
                             + Furniture
                         </Button>
                     </div>
@@ -429,7 +503,7 @@ export const Studio: React.FC = () => {
                     </div>
                 </div>
 
-                <input type="file" ref={refInputRef} className="hidden" accept="image/*" multiple onChange={(e) => handleFileUpload(e, true)} />
+                <input type="file" ref={refInputRef} className="hidden" accept="image/*" multiple onChange={(e) => handleFileUpload(e, 'ref')} />
             </div>
         </div>
 
@@ -446,18 +520,19 @@ export const Studio: React.FC = () => {
              </div>
 
              {/* Background Blur for Mobile/Desktop fill */}
-             {state.baseImage && (
+             {state.spaceImages.length > 0 && (
                  <div className="absolute inset-0 z-0 opacity-20 blur-[100px] pointer-events-none">
-                     <img src={state.baseImage} className="w-full h-full object-cover" />
+                     <img src={state.spaceImages[state.activeSpaceIndex]} className="w-full h-full object-cover" />
                  </div>
              )}
 
-             <div className="relative z-10 w-full lg:max-w-[95%] lg:max-h-[85%] lg:aspect-video aspect-video bg-[#1a1a1c] lg:rounded-2xl border-y lg:border border-white/10 shadow-2xl overflow-hidden group transition-all duration-500">
-                 {!state.baseImage ? (
+             <div className="relative z-10 w-full lg:max-w-[95%] lg:max-h-[80%] lg:aspect-video aspect-video bg-[#1a1a1c] lg:rounded-2xl border-y lg:border border-white/10 shadow-2xl overflow-hidden group transition-all duration-500">
+                 {state.spaceImages.length === 0 ? (
                      <div className="absolute inset-0 flex flex-col items-center justify-center text-white/30 hover:text-white/50 transition-colors cursor-pointer" onClick={() => fileInputRef.current?.click()}>
                          <Upload className="w-8 h-8 lg:w-16 lg:h-16 mb-3 lg:mb-6 opacity-50" />
                          <p className="text-lg lg:text-2xl font-light">Upload your space</p>
-                         <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={(e) => handleFileUpload(e, false)} />
+                         <p className="text-xs lg:text-sm mt-2 opacity-50">Upload multiple angles for better understanding</p>
+                         <input type="file" ref={fileInputRef} className="hidden" accept="image/*" multiple onChange={(e) => handleFileUpload(e, 'space')} />
                      </div>
                  ) : (
                      <>
@@ -471,7 +546,7 @@ export const Studio: React.FC = () => {
                                     className="absolute inset-0 overflow-hidden border-r-2 border-white shadow-[0_0_20px_rgba(0,0,0,0.5)]" 
                                     style={{ width: `${sliderPos}%` }}
                                 >
-                                    <img src={state.baseImage} className="w-full h-full object-cover" />
+                                    <img src={state.spaceImages[state.activeSpaceIndex]} className="w-full h-full object-cover" />
                                 </div>
                                 <div 
                                     className="absolute top-1/2 -translate-y-1/2 w-8 h-8 bg-white rounded-full shadow-lg flex items-center justify-center text-black font-bold z-20"
@@ -491,20 +566,64 @@ export const Studio: React.FC = () => {
                                 </div>
                             </div>
                         ) : (
-                            <img src={state.baseImage} className="w-full h-full object-cover" />
+                            <img src={state.spaceImages[state.activeSpaceIndex]} className="w-full h-full object-cover" />
                         )}
                         
                         {state.showGuide && <GuideSpot text="Drag the slider to compare Before & After." position="top-1/2 left-1/2" />}
                      </>
                  )}
              </div>
+
+             {/* MULTI-IMAGE CAROUSEL DOCK (Bottom) */}
+             {state.spaceImages.length > 0 && (
+                <div className="absolute bottom-4 left-0 right-0 z-40 flex justify-center px-4">
+                    <div className="flex items-center gap-2 p-2 bg-black/60 backdrop-blur-xl border border-white/20 rounded-2xl shadow-2xl overflow-x-auto no-scrollbar max-w-full">
+                        {state.spaceImages.map((img, idx) => (
+                            <div 
+                                key={idx} 
+                                onClick={() => setActiveSpaceImage(idx)}
+                                className={`relative w-12 h-12 lg:w-16 lg:h-16 shrink-0 rounded-xl overflow-hidden cursor-pointer transition-all border-2 group ${idx === state.activeSpaceIndex ? 'border-indigo-500 scale-105 shadow-[0_0_15px_rgba(99,102,241,0.5)]' : 'border-transparent opacity-60 hover:opacity-100'}`}
+                            >
+                                <img src={img} className="w-full h-full object-cover" />
+                                <button 
+                                    onClick={(e) => removeSpaceImage(idx, e)}
+                                    className="absolute top-0 right-0 p-0.5 bg-red-500 text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                                >
+                                    <X className="w-3 h-3" />
+                                </button>
+                                {idx === state.activeSpaceIndex && (
+                                    <div className="absolute bottom-0 left-0 right-0 bg-indigo-600 text-[8px] text-center text-white font-bold uppercase py-0.5">Active</div>
+                                )}
+                            </div>
+                        ))}
+                        
+                        {totalImageCount < MAX_TOTAL_IMAGES && (
+                            <button 
+                                onClick={triggerSpaceUpload}
+                                className="w-12 h-12 lg:w-16 lg:h-16 shrink-0 rounded-xl bg-white/5 border border-white/10 flex flex-col items-center justify-center text-white/50 hover:bg-white/10 hover:text-white transition-colors"
+                            >
+                                <Plus className="w-5 h-5 mb-1" />
+                                <span className="text-[9px] font-bold">ADD</span>
+                            </button>
+                        )}
+                        
+                        <input type="file" ref={addMoreSpaceRef} className="hidden" accept="image/*" multiple onChange={(e) => handleFileUpload(e, 'space')} />
+                        
+                        <div className="h-8 w-px bg-white/10 mx-1" />
+                        <div className="flex flex-col justify-center px-1">
+                            <span className="text-[10px] text-white/40 uppercase font-bold tracking-wider">Angles</span>
+                            <span className="text-xs font-mono text-indigo-400">{state.spaceImages.length}</span>
+                        </div>
+                    </div>
+                </div>
+             )}
              
-             {/* STRUCTURE LOCK TOGGLE - FLOATING BOTTOM CENTER */}
-             {state.baseImage && !state.generatedImage && (
-                 <div className="absolute bottom-4 lg:bottom-8 left-1/2 -translate-x-1/2 z-20">
+             {/* STRUCTURE LOCK TOGGLE - Repositioned slightly higher */}
+             {state.spaceImages.length > 0 && !state.generatedImage && (
+                 <div className="absolute bottom-24 lg:bottom-28 left-1/2 -translate-x-1/2 z-20">
                      <button 
                         onClick={() => setState(p => ({...p, structureLocked: !p.structureLocked}))}
-                        className={`flex items-center gap-3 px-4 py-2 lg:px-6 lg:py-3 rounded-full backdrop-blur-md border transition-all ${state.structureLocked ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300' : 'bg-red-500/20 border-red-500/50 text-red-300'}`}
+                        className={`flex items-center gap-3 px-4 py-2 lg:px-6 lg:py-3 rounded-full backdrop-blur-md border transition-all shadow-lg ${state.structureLocked ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300' : 'bg-red-500/20 border-red-500/50 text-red-300'}`}
                      >
                          {state.structureLocked ? <Lock className="w-3 h-3 lg:w-4 lg:h-4" /> : <Unlock className="w-3 h-3 lg:w-4 lg:h-4" />}
                          <span className="font-bold text-xs lg:text-sm tracking-wide">
@@ -676,7 +795,7 @@ export const Studio: React.FC = () => {
            <div style={{ display: 'flex', gap: '10px', marginBottom: '30px' }}>
                 <div style={{ flex: 1 }}>
                     <p style={{ fontSize: '10px', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '5px' }}>CURRENT STATE</p>
-                    {state.baseImage && <img src={state.baseImage} style={{ width: '100%', borderRadius: '4px' }} />}
+                    {state.spaceImages.length > 0 && <img src={state.spaceImages[state.activeSpaceIndex]} style={{ width: '100%', borderRadius: '4px' }} />}
                 </div>
                 <div style={{ flex: 1.5 }}>
                     <p style={{ fontSize: '10px', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '5px' }}>FUTURE VISION</p>
@@ -689,14 +808,46 @@ export const Studio: React.FC = () => {
                 <div dangerouslySetInnerHTML={{ __html: state.reportContent || '<p>Analysis pending...</p>' }} style={{ fontSize: '12px', lineHeight: '1.6' }} />
            </div>
 
-           <div>
-               <p style={{ fontSize: '10px', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '10px' }}>MOOD BOARD & REFERENCES</p>
-               <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-                   {state.referenceImages.map(img => (
-                       <img key={img.id} src={img.url} style={{ width: '60px', height: '60px', objectFit: 'cover', borderRadius: '4px' }} />
-                   ))}
+           {/* NEW SECTION START */}
+           <div style={{ borderTop: '2px solid #eee', paddingTop: '20px' }}>
+               <h3 style={{ fontSize: '12px', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '15px', color: '#000' }}>Project Assets</h3>
+               
+               <div style={{ display: 'flex', gap: '20px' }}>
+                   {/* Space Context */}
+                   <div style={{ flex: 1 }}>
+                       <p style={{ fontSize: '10px', fontWeight: 'bold', textTransform: 'uppercase', color: '#888', marginBottom: '8px' }}>Space Context ({state.spaceImages.length})</p>
+                       <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
+                           {state.spaceImages.map((img, i) => (
+                               <img key={i} src={img} style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '2px', border: i === state.activeSpaceIndex ? '2px solid #000' : '1px solid #eee' }} />
+                           ))}
+                       </div>
+                   </div>
+
+                   {/* Style References */}
+                   <div style={{ flex: 1 }}>
+                       <p style={{ fontSize: '10px', fontWeight: 'bold', textTransform: 'uppercase', color: '#888', marginBottom: '8px' }}>Style Refs</p>
+                       <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
+                           {state.referenceImages.filter(i => i.type === 'style').map(img => (
+                               <img key={img.id} src={img.url} style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '2px', border: '1px solid #eee' }} />
+                           ))}
+                           {state.referenceImages.filter(i => i.type === 'style').length === 0 && <span style={{fontSize: '10px', color: '#ccc'}}>None</span>}
+                       </div>
+                   </div>
+
+                   {/* Furniture */}
+                   <div style={{ flex: 1 }}>
+                       <p style={{ fontSize: '10px', fontWeight: 'bold', textTransform: 'uppercase', color: '#888', marginBottom: '8px' }}>Furniture</p>
+                       <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
+                           {state.referenceImages.filter(i => i.type === 'element').map(img => (
+                               <img key={img.id} src={img.url} style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '2px', border: '1px solid #eee' }} />
+                           ))}
+                           {state.referenceImages.filter(i => i.type === 'element').length === 0 && <span style={{fontSize: '10px', color: '#ccc'}}>None</span>}
+                       </div>
+                   </div>
                </div>
            </div>
+           {/* NEW SECTION END */}
+
       </div>
 
     </div>

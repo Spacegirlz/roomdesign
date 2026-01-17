@@ -31,7 +31,8 @@ export interface ChatMessage {
 
 export interface DesignState {
   projectID: string;
-  baseImage: string | null;
+  spaceImages: string[]; // Array of base images (angles)
+  activeSpaceIndex: number; // Currently selected view
   referenceImages: ReferenceImage[];
   generatedImage: string | null;
   mode: DesignMode;

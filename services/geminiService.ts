@@ -119,7 +119,8 @@ export const generateReportText = async (
 }
 
 export const generateRoomViz = async (
-  baseImage: string,
+  activeSpaceImage: string,
+  contextSpaceImages: string[],
   mode: DesignMode,
   userPrompt: string,
   referenceImages: ReferenceImage[] = [],
@@ -219,15 +220,31 @@ export const generateRoomViz = async (
 
     const parts: any[] = [
       { text: promptText },
-      {
-        inlineData: {
-          data: baseImage.split(',')[1],
-          mimeType: 'image/jpeg' 
-        }
-      }
     ];
 
-    // Add references (Limit 8)
+    // Add Context Images First
+    if (contextSpaceImages.length > 0) {
+        parts.push({ text: "SPATIAL CONTEXT: The following images are different angles of the same room. Use them to understand the room's geometry, but DO NOT redesign these specific views." });
+        contextSpaceImages.forEach(img => {
+            parts.push({
+                inlineData: {
+                  data: img.split(',')[1],
+                  mimeType: 'image/jpeg' 
+                }
+            });
+        });
+    }
+
+    // Add Target Image
+    parts.push({ text: "PRIMARY TARGET: Redesign the following image based on the instructions. This is the view that must be generated." });
+    parts.push({
+        inlineData: {
+          data: activeSpaceImage.split(',')[1],
+          mimeType: 'image/jpeg' 
+        }
+    });
+
+    // Add references (Limit total parts carefully)
     referenceImages.slice(0, 8).forEach(img => {
       parts.push({
         inlineData: {
